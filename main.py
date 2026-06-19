@@ -103,30 +103,39 @@ async def set_agente_activo(contact_id: str, agente: str):
             )
 
 
-async def get_tarea_pendiente(contact_id: str) -> str:
-    """Devuelve qué recolección quedó a medias: 'leads', 'proveedores', 'productos' (reclamo) o ''."""
+async def get_estado(contact_id: str) -> dict:
+    """Lee el estado de recoleccion: tarea pendiente + qué recolecciones ya se exportaron.
+    exportado_leads / exportado_reclamo / exportado_proveedores evitan guardar dos veces."""
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/conversaciones_v2",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"contact_id": f"eq.{contact_id}", "select": "tarea_pendiente"}
+            params={"contact_id": f"eq.{contact_id}",
+                    "select": "tarea_pendiente,exportado_leads,exportado_reclamo,exportado_proveedores"}
         )
         try:
             data = r.json()
-            if data and data[0].get("tarea_pendiente"):
-                return str(data[0]["tarea_pendiente"]).strip().lower()
+            if data:
+                d = data[0]
+                return {
+                    "tarea": str(d.get("tarea_pendiente") or "").strip().lower(),
+                    "exportado_leads": bool(d.get("exportado_leads")),
+                    "exportado_reclamo": bool(d.get("exportado_reclamo")),
+                    "exportado_proveedores": bool(d.get("exportado_proveedores")),
+                }
         except Exception:
             pass
-        return ""
+        return {"tarea": "", "exportado_leads": False, "exportado_reclamo": False, "exportado_proveedores": False}
 
 
-async def set_tarea_pendiente(contact_id: str, valor: str):
+async def set_estado(contact_id: str, campos: dict):
+    """Actualiza uno o más campos de estado (tarea_pendiente y/o flags exportado_*)."""
     async with httpx.AsyncClient() as client:
         await client.patch(
             f"{SUPABASE_URL}/rest/v1/conversaciones_v2",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
             params={"contact_id": f"eq.{contact_id}"},
-            json={"tarea_pendiente": valor}
+            json=campos
         )
 
 
@@ -342,7 +351,8 @@ PERSONALIDAD: cálido, empático, cercano. Hablás en español rioplatense pero 
 
 REGLAS GENERALES:
 - NUNCA inventes características, diferencias ni propiedades de productos. Solo informás lo que está explícitamente en la base de conocimiento. Si no está, decí "Esa información no la tengo disponible por el momento." y nada más.
-- Si el contacto pregunta por un producto que NO figura en la base (por ejemplo lavandina, u otro que no esté listado), decí con naturalidad que ese producto no forma parte de la línea Ecovita. No lo inventes ni inventes formatos.
+- Si el contacto pregunta por un producto que NO figura en la base (por ejemplo lavandina, jabón de manos, u otro que no esté listado), decí con naturalidad y de forma breve que ese producto no forma parte de la línea Ecovita. No lo inventes ni inventes formatos. NO sugieras usar otro producto para un fin que no le corresponde (por ejemplo, NO recomiendes lavarse las manos con lavavajillas). No recomiendes marcas de la competencia.
+- Cuidá el registro: nada de expresiones desubicadas o de autocrítica tipo "fue al pedo la sugerencia", "qué tonto", etc. Sé cordial, profesional y directo. Si algo no lo tenés, lo decís simple y seguís.
 - No des precios nunca bajo ningún concepto.
 - Nunca digas que vas a derivar o pasar al usuario con alguien. Sos autónomo.
 - Si no tenés información sobre algo específico → decile "Esa información no la tengo disponible por el momento." No prometas consultas ni seguimiento. No des datos de contacto de ningún tipo.
@@ -357,7 +367,7 @@ Encontrá nuestros productos en todas las sucursales de Carrefour, Coto, Changom
 Para compras mayoristas, podés conseguirlos en tiendas Makro, Maxi Carrefour y Nini, o en los principales mayoristas del interior del país.
 🚴‍♂️ ¿Preferís pedir desde casa? También estamos en PedidosYa, Mercado Libre y Rappi.
 
-Cuando alguien pregunta si tienen tienda online, mencioná que los productos están en PedidosYa, Mercado Libre y Rappi, y que en junio 2026 los productos Smart van a estar disponibles para compra en bulto en la tienda Ecosmart de Tienda Nube.
+Cuando alguien pregunta si tienen tienda online, mencioná que los productos están en PedidosYa, Mercado Libre y Rappi, y que en agosto 2026 los productos Smart van a estar disponibles para compra en bulto en la tienda Ecosmart de Tienda Nube.
 
 DESPEDIDA — cuando el contacto se despide o cierra la conversación, usá este texto:
 "Gracias por comunicarte con el asistente virtual de Ecovita. Quedo a disposición para lo que necesites. Hasta la próxima 👋"
@@ -372,6 +382,7 @@ RECLAMOS — cuando el contacto reporta un problema con un producto:
 - Cuando tenés los 4 datos, cerrá el reclamo con este texto exacto:
 "Lamentamos este inconveniente. Gracias por brindarnos todos los datos. Vamos a derivar tu caso al área correspondiente para su análisis. En caso de necesitar información adicional, nos vamos a comunicar con vos. Agradecemos que nos hayas escrito y nos ayudes a seguir mejorando. Quedamos a disposición para cualquier otra consulta."
 - Una vez que cerraste el reclamo con el texto de cierre, en todos los mensajes siguientes poné reclamo_completo: false y todos los campos del reclamo vacíos.
+- IMPORTANTE: aunque un reclamo ya esté cerrado, si el contacto lo vuelve a mencionar, NUNCA digas "no tengo registro de eso" ni niegues que existió. Reconocé lo que ya hablaron (lo ves en el historial) y respondé en consecuencia: por ejemplo, confirmá que el reclamo ya quedó registrado y que el equipo se va a comunicar, o pedí el dato puntual que falte. El contacto tiene que sentir continuidad, no que perdiste la memoria.
 
 RESPUESTA JSON OBLIGATORIA después de cada mensaje (ManyChat lo lee, el usuario NO lo ve):
 ---JSON---
@@ -408,7 +419,7 @@ Primeros auxilios: ojos/piel → lavar con abundante agua. Ingestión → no pro
 === DATOS COMUNES LÍNEA SMART ===
 Sistema: sachet concentrado + agua = producto listo. 80% ahorro vs formato tradicional. 96% menos plástico. 5x más perfume.
 Vigencia: 24 meses sin diluir. Una vez diluido: consumir en 3 meses. No lavar el envase para próximas diluciones.
-Compra por bulto (mayoristas/empresas): tienda Ecosmart en Tienda Nube, disponible junio 2026.
+Compra por bulto (mayoristas/empresas): tienda Ecosmart en Tienda Nube, disponible agosto 2026.
 Bultos: 3 displays por bulto. Sachets 27ml: 50/display | 150ml: 15/display | 135ml: 15/display.
 Envases asociados: 27ml → botella 900ml | 150ml → bidón 5L | lavavajillas 150ml → botella 500ml | jabón 135ml → botella 800ml.
 Frase clave: "Comprás el envase una sola vez y después reponés siempre con sachets, generando mucho menos plástico."
@@ -801,20 +812,21 @@ TU OBJETIVO: recolectar estos datos de a uno por mensaje, en orden, de forma nat
 6. Tipo de negocio: supermercado, distribuidor, mayorista, u otro que el contacto describa (tipo_empresa_vendedor)
 7. Volumen estimado de compra — preguntá exactamente así: "¿Cuál sería el volumen estimado de compra? Podés indicarlo en pallets o bultos, por semana o por mes." (volumen_comercio_vendedor)
    - No hagas ningún comentario sobre el volumen indicado.
-   - Si el tipo no es supermercado/distribuidor/mayorista → informale sobre la tienda Ecosmart (disponible junio 2026) para compra de productos Smart por bulto.
+   - Si el tipo no es supermercado/distribuidor/mayorista → informale sobre la tienda Ecosmart (disponible agosto 2026) para compra de productos Smart por bulto.
 8. Invitarlo a dejar un mensaje adicional (mensaje_adicional_potencial_cliente)
 
 CIERRE según tipo de negocio — solo al terminar la recolección:
 - Supermercado, distribuidor o mayorista → "Ya tenemos todos tus datos. Un representante comercial de Ecovita se va a poner en contacto con vos a la brevedad."
-- Otro → informale sobre la tienda Ecosmart disponible en junio 2026.
+- Otro → informale sobre la tienda Ecosmart disponible en agosto 2026.
 
 REGLAS:
 - Recolectá un dato por mensaje, no hagas varias preguntas juntas.
 - No des precios ni condiciones comerciales.
 - NO des información sobre productos. Si en el historial ves que el contacto preguntó algo de productos, ESO ya lo respondió otra parte del sistema: vos solo continuá con la recolección por donde ibas, sin repetir lo del producto.
+- RETOMAR TRAS UN DESVÍO: si el contacto interrumpió la carga de datos para preguntar otra cosa y ahora vuelve, retomá de forma suave y natural, sin reprocharlo. Por ejemplo: "Dale, retomamos donde quedamos. Te estaba preguntando por [el dato que falta]". Mirá el historial para saber qué dato sigue. Nunca arranques de cero ni vuelvas a pedir datos ya dados.
 - Solo texto plano, sin markdown.
 
-POST-RECOLECCIÓN: cuando ya tenés los 8 campos y el usuario sigue escribiendo, respondé sus preguntas de seguimiento. Si el usuario se despide usá este texto exacto: "Gracias por comunicarte con el asistente virtual de Ecovita. Quedo a disposición para lo que necesites. Hasta la próxima 👋"
+POST-RECOLECCIÓN: cuando ya tenés los 8 campos y el usuario sigue escribiendo, seguí atendiéndolo con naturalidad: respondé sus preguntas, reconocé lo que ya cargaron (lo ves en el historial) y nunca digas que no tenés registro de la conversación. No des por cerrada la charla de forma tajante. Si el usuario se despide usá este texto exacto: "Gracias por comunicarte con el asistente virtual de Ecovita. Quedo a disposición para lo que necesites. Hasta la próxima 👋"
 
 RESPUESTA JSON OBLIGATORIA después de cada mensaje (ManyChat lo lee, el usuario NO lo ve):
 ---JSON---
@@ -842,6 +854,7 @@ Recolectá estos datos de a uno por mensaje, en orden:
 2. Producto o servicio que ofrecen (producto_o_servicio_proveedor)
 3. Redes sociales o sitio web (redes_proveedor)
 4. Teléfono de contacto (dato_contacto_proveedor)
+   - Pedilo normalmente. Pero si el contacto responde "usá este", "el mismo que estoy usando", "el de WhatsApp", "este número" o similar (refiriéndose al teléfono desde el que escribe), NO insistas: dejá dato_contacto_proveedor vacío y poné usar_telefono_wpp: true en el JSON. El sistema completará el número del WhatsApp automáticamente. Dale por válido y seguí con el siguiente dato.
 5. Mail del responsable comercial (mail_proveedor)
 Cuando tenés los 5: "Muchas gracias. Su propuesta será evaluada por el área de compras correspondiente. En caso de haber interés, nos comunicaremos con ustedes." No prometas tiempos.
 
@@ -857,13 +870,14 @@ REGLAS GENERALES:
 - No hagas promesas sobre tiempos ni resultados.
 - No des información sobre proveedores actuales ni estructura interna.
 - NO des información sobre productos ni tomes reclamos. Si en el historial ves que el contacto preguntó algo de productos o reportó un reclamo, ESO ya lo respondió otra parte del sistema: vos solo continuá con la recolección por donde ibas.
+- RETOMAR TRAS UN DESVÍO: si el contacto interrumpió la carga para preguntar otra cosa y ahora vuelve, retomá de forma suave y natural, sin reprocharlo ("Dale, seguimos donde quedamos. Te estaba pidiendo [el dato que falta]"). Mirá el historial para saber qué dato sigue.
 - Siempre incluí el JSON del tipo de contacto que estás atendiendo.
 
-POST-RECOLECCIÓN: cuando ya terminaste y el usuario sigue escribiendo, respondé sus preguntas de seguimiento. Si el usuario se despide usá este texto exacto: "Gracias por comunicarte con el asistente virtual de Ecovita. Quedo a disposición para lo que necesites. Hasta la próxima 👋"
+POST-RECOLECCIÓN: cuando ya terminaste y el usuario sigue escribiendo, seguí atendiéndolo con naturalidad: respondé sus preguntas, reconocé lo que ya cargaron (lo ves en el historial) y nunca digas que no tenés registro de la conversación. No des por cerrada la charla de forma tajante. Si el usuario se despide usá este texto exacto: "Gracias por comunicarte con el asistente virtual de Ecovita. Quedo a disposición para lo que necesites. Hasta la próxima 👋"
 
 RESPUESTA JSON OBLIGATORIA después de cada mensaje (ManyChat lo lee, el usuario NO lo ve):
 ---JSON---
-{"tipo": "", "nombre_proveedor": "", "producto_o_servicio_proveedor": "", "redes_proveedor": "", "dato_contacto_proveedor": "", "mail_proveedor": "", "cv_archivo_2": "", "comentario_cv": "", "recoleccion_completa": false}
+{"tipo": "", "nombre_proveedor": "", "producto_o_servicio_proveedor": "", "redes_proveedor": "", "dato_contacto_proveedor": "", "mail_proveedor": "", "cv_archivo_2": "", "comentario_cv": "", "usar_telefono_wpp": false, "recoleccion_completa": false}
 ---FIN---
 - Para proveedores: tipo="proveedor". Para postulantes: tipo="postulante".
 - Completá solo los campos relevantes.
@@ -904,7 +918,8 @@ async def manejar_turno(contact_id: str, mensaje: str):
     historial = await get_historial(contact_id)
     if len(historial) > 40:
         historial = historial[-40:]
-    tarea = await get_tarea_pendiente(contact_id)
+    estado = await get_estado(contact_id)
+    tarea = estado["tarea"]
 
     # 1) El router decide la ruta de ESTE mensaje
     ruta = await clasificar_ruta(historial, mensaje, tarea)
@@ -932,36 +947,48 @@ async def manejar_turno(contact_id: str, mensaje: str):
     await guardar_historial(contact_id, historial)
     await guardar_log(contact_id, agente, mensaje, texto)
 
-    # 4) Mantener tarea_pendiente + guardar datos en Supabase al COMPLETAR
-    #    'tarea' es el estado ANTES de este turno. Si venía activa y ahora se
-    #    completa, este es el único turno donde guardamos (sin duplicar).
-    #    'recien_completado' = true SOLO en ese turno → dispara Sheets y Zap una vez.
+    # 4) Mantener tarea_pendiente + guardar datos al COMPLETAR
+    #    Regla robusta: se guarda cuando el agente marca su recolección completa
+    #    Y todavía no se exportó esa recolección (flag exportado_*). Así el guardado
+    #    NO depende de tarea_pendiente, que el router puede pisar al saltar de agente.
+    #    recien_completado = true solo en el turno donde se guarda → dispara Sheets/Zap una vez.
     recien_completado = False
     if agente == "leads":
         if json_data.get("recoleccion_completa"):
-            if tarea == "leads":
+            if not estado["exportado_leads"]:
                 await guardar_lead(contact_id, json_data)
                 recien_completado = True
-            await set_tarea_pendiente(contact_id, "")
+                await set_estado(contact_id, {"tarea_pendiente": "", "exportado_leads": True})
+            else:
+                await set_estado(contact_id, {"tarea_pendiente": ""})
         else:
-            await set_tarea_pendiente(contact_id, "leads")
+            # recolección en curso → marca tarea y resetea el flag (es una recolección viva)
+            await set_estado(contact_id, {"tarea_pendiente": "leads", "exportado_leads": False})
     elif agente == "proveedores":
         if json_data.get("recoleccion_completa"):
-            if tarea == "proveedores":
+            if not estado["exportado_proveedores"]:
                 await guardar_proveedor(contact_id, json_data)
                 recien_completado = True
-            await set_tarea_pendiente(contact_id, "")
+                await set_estado(contact_id, {"tarea_pendiente": "", "exportado_proveedores": True})
+            else:
+                await set_estado(contact_id, {"tarea_pendiente": ""})
         else:
-            await set_tarea_pendiente(contact_id, "proveedores")
+            await set_estado(contact_id, {"tarea_pendiente": "proveedores", "exportado_proveedores": False})
     elif agente == "productos":
         if json_data.get("reclamo_completo"):
-            if tarea == "productos":
+            if not estado["exportado_reclamo"]:
                 await guardar_reclamo(contact_id, json_data)
                 recien_completado = True
-            await set_tarea_pendiente(contact_id, "")
+                await set_estado(contact_id, {"tarea_pendiente": "", "exportado_reclamo": True})
+            else:
+                await set_estado(contact_id, {"tarea_pendiente": ""})
         elif (json_data.get("nombre_producto_defectuoso") or json_data.get("n_lote_producto_defectuoso")
               or json_data.get("descripcion_problema_reclamos")):
-            await set_tarea_pendiente(contact_id, "productos")
+            # reclamo en curso → solo marca tarea si NO hay otra recolección (leads/prov) viva
+            if tarea in ("", "productos"):
+                await set_estado(contact_id, {"tarea_pendiente": "productos", "exportado_reclamo": False})
+            else:
+                await set_estado(contact_id, {"exportado_reclamo": False})
         # productos sin reclamo: NO toca tarea (preserva una recolección leads/proveedores pendiente)
     # charla: no toca tarea
 
@@ -1019,6 +1046,7 @@ def _respuesta_unificada(agente, texto, json_data):
         "mail_proveedor": jd.get("mail_proveedor", ""),
         "cv_archivo_2": jd.get("cv_archivo_2", ""),
         "comentario_cv": jd.get("comentario_cv", ""),
+        "usar_telefono_wpp": jd.get("usar_telefono_wpp", False),
     }
 
 
